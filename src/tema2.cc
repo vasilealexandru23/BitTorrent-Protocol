@@ -33,6 +33,8 @@ void peer(int numtasks, int rank) {
     void *status;
     int r;
 
+    
+
     r = pthread_create(&download_thread, NULL, download_thread_func, (void *) &rank);
     if (r) {
         printf("Eroare la crearea thread-ului de download\n");
