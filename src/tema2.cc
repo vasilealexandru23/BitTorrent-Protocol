@@ -8,12 +8,220 @@
 /* For testing. */
 const std::string PATH = "../checker/tests/test1/";
 
+/* Keep local files for interogation. */
+std::unordered_map<std::string, std::vector<struct Segment>> myFiles;
+
+/* Requested file names. */
+std::vector<std::string> requestedFiles;
+
 void *download_thread_func(void *arg)
 {
     int rank = *(int*) arg;
-    int requestedFiles;
-    struct sendAllFiles ownedFiles;
     struct packet send, recv;
+    MPI_Status status;
+
+    /* Read the requested files. */
+    for (auto file : requestedFiles) {
+        char requestedFile[MAX_FILENAME + 1] = {0};
+        strcpy(requestedFile, file.c_str());
+
+        /* Request segments from tracker. */
+        MPI_Send(requestedFile, MAX_FILENAME + 1, MPI_BYTE, TRACKER_RANK, TRACKER_FILE_SEGMENTS, MPI_COMM_WORLD);
+        struct FileData fileData;
+        MPI_Recv(&fileData, sizeof(FileData), MPI_BYTE, TRACKER_RANK, TRACKER_FILE_SEGMENTS, MPI_COMM_WORLD, &status);
+
+        DIE(strcmp(fileData.fileName, requestedFile) != 0, "File name mismatch.");
+
+        int numSegments = fileData.numSegments;
+        struct Segment *file_segments = fileData.Segments;
+        struct swarm_t swarm;
+        int numClients;
+        int *clients;
+
+        int recvSegments = 0;
+        while (true) {
+            if (recvSegments % MAX_SEG_RUN == 0) {
+                std::cout << "INTRA AICI" << std::endl;
+                /* Request the swarm list update. */
+                MPI_Send(requestedFile, MAX_FILENAME + 1, MPI_BYTE, TRACKER_RANK, SEND_FILE_SWARM, MPI_COMM_WORLD);
+                MPI_Recv(&swarm, sizeof(swarm_t), MPI_BYTE, TRACKER_RANK, SEND_FILE_SWARM, MPI_COMM_WORLD, &status);
+                numClients = swarm.numClients;
+                clients = swarm.clients;
+            }
+            std::cout << "IESE AICI" << std::endl;
+
+            /* Check every client and fine the one with loawest number of uploads. */
+            int bestClient = -1;
+            int lowestNumberUpload = INT_MAX;
+            struct askSegment toAsk;
+            strcpy(toAsk.fileName, requestedFile);
+            toAsk.segment = file_segments[recvSegments];
+            toAsk.op = ASK;
+
+            for (int i = 0; i < numClients; ++i) {
+                MPI_Send(&toAsk, sizeof(askSegment), MPI_BYTE, clients[i], PEER_TO_PEER_REQUEST, MPI_COMM_WORLD);
+                int response;
+                MPI_Recv(&response, sizeof(int), MPI_BYTE, clients[i], PEER_TO_PEER_RESPONSE, MPI_COMM_WORLD, &status);
+                if (response != -1 && response < lowestNumberUpload) {
+                    lowestNumberUpload = response;
+                    bestClient = clients[i];
+                }
+            }
+
+            toAsk.op = DOWNLOAD;
+
+            std::cout << "Acum aici !!\n";
+            if (bestClient != -1) {
+                std::cout << "ERROR: No client has the segment. RETRY...\n";
+                continue;
+            } else {
+                MPI_Send(&toAsk, sizeof(askSegment), MPI_BYTE, bestClient, PEER_TO_PEER_REQUEST, MPI_COMM_WORLD);
+                struct packet response;
+                MPI_Recv(&response, sizeof(packet), MPI_BYTE, bestClient, PEER_TO_PEER_RESPONSE, MPI_COMM_WORLD, &status);
+                if (response.type == ACK) {
+                    /* Mark segment as downloaded and increment the index of the current segment.*/
+                    myFiles[requestedFile].push_back(file_segments[recvSegments++]);
+                    std::cout << "Segment downloaded.\n";
+                    if (recvSegments != 1) {
+                        /* TODO: Say to tracker that I am now peer. */
+                    }
+                } else {
+                    std::cout << "ERROR: Client didn't send the segment. RETRY...\n";
+                    continue;
+                }
+            }
+
+            if (recvSegments == numSegments) {
+                /* TODO: send to tracker that I finished download + make me seed. */
+                break;
+            }
+        }
+    }
+
+
+
+    /* TODO: send to tracker the message that all files are installed. */
+
+    return NULL;
+}
+
+void *upload_thread_func(void *arg)
+{
+    int rank = *(int*) arg;
+    int numberUploads = 0;
+
+    MPI_Status status;
+    void *recvData = calloc(MAX_PACKET_SIZE, 1);
+
+    while (true) {
+        /* TODO: receive packets until I get from tracker. */
+        MPI_Recv(recvData, MAX_PACKET_SIZE, MPI_BYTE, MPI_ANY_SOURCE, PEER_TO_PEER_REQUEST, MPI_COMM_WORLD, &status);
+        if (status.MPI_SOURCE == TRACKER_RANK) {
+            /* TODO */
+            break;
+        } else {
+            struct askSegment askSegment = *(struct askSegment *) recvData;
+            if (askSegment.op == ASK) {
+                if (find(myFiles[askSegment.fileName].begin(), myFiles[askSegment.fileName].end(), askSegment.segment) != myFiles[askSegment.fileName].end()) {
+                    /* Send the number of uploads. */
+                    MPI_Send(&numberUploads, sizeof(int), MPI_BYTE, status.MPI_SOURCE, PEER_TO_PEER_RESPONSE, MPI_COMM_WORLD);
+                } else {
+                    /* Send -1 to signal that I don't have the segment. */
+                    int response = -1;
+                    MPI_Send(&response, sizeof(int), MPI_BYTE, status.MPI_SOURCE, PEER_TO_PEER_RESPONSE, MPI_COMM_WORLD);
+                }
+            } else if (askSegment.op == DOWNLOAD) {
+                if (find(myFiles[askSegment.fileName].begin(), myFiles[askSegment.fileName].end(), askSegment.segment) != myFiles[askSegment.fileName].end()) {
+                    struct packet ack = {ACK, NULL};
+                    MPI_Send(&ack, sizeof(packet), MPI_BYTE, status.MPI_SOURCE, PEER_TO_PEER_RESPONSE, MPI_COMM_WORLD);
+                    numberUploads++;
+                } else {
+                    struct packet nack = {NACK, NULL};
+                    MPI_Send(&nack, sizeof(packet), MPI_BYTE, status.MPI_SOURCE, PEER_TO_PEER_RESPONSE, MPI_COMM_WORLD);
+                }
+            }
+        }
+        
+    }
+
+    return NULL;
+}
+
+void tracker(int numtasks, int rank) {
+    /* <File, <Segments>> */
+    std::unordered_map<std::string, std::vector<struct Segment>> fileSegments;
+
+    /* <File, <Owner's rank>> */
+    std::map<std::string, std::vector<client_t>> fileSwarm;
+
+    MPI_Status status;
+    int recvFromClients = 0;
+
+    while (true) {
+        /* Receive packets from clients. */
+        struct sendAllFiles recvOwnedFiles;
+        MPI_Recv(&recvOwnedFiles, sizeof(sendAllFiles), MPI_BYTE, MPI_ANY_SOURCE, TRACKER_BARRIER, MPI_COMM_WORLD, &status);
+        recvFromClients++;
+
+        /* Iterate over all files. */
+        for (int f = 0; f < recvOwnedFiles.numFiles; ++f) {
+            std::string fileName(recvOwnedFiles.files[f].fileName);
+
+            /* Check if we have the segment data already for this file. */
+            if (fileSegments[fileName].size() == 0) {
+                for (int s = 0; s < recvOwnedFiles.files[f].numSegments; ++s) {
+                    struct Segment segment = recvOwnedFiles.files[f].Segments[s];
+                    fileSegments[fileName].push_back(segment);
+                }
+            }
+
+            /* Add the owner of the file to the swarm. */
+            fileSwarm[fileName].push_back({status.MPI_SOURCE, SEED});
+        }
+
+        if (recvFromClients == numtasks - 1) {
+            break;
+        }
+    }
+
+    /* Send ACK to all ranks. */
+    struct packet ack = {ACK, NULL};
+    for (int i = 1; i <= numtasks - 1; ++i) {
+        MPI_Send(&ack, sizeof(packet), MPI_BYTE, i, TRACKER_BARRIER, MPI_COMM_WORLD);
+    }
+
+    void *recvData = calloc(MAX_PACKET_SIZE, 1);
+    while (true) {
+        MPI_Recv(recvData, MAX_PACKET_SIZE, MPI_BYTE, MPI_ANY_SOURCE, MPI_ANY_TAG, MPI_COMM_WORLD, &status); 
+        if (status.MPI_TAG == TRACKER_FILE_SEGMENTS) {
+            std::string requestedFile((char *) recvData);
+            struct FileData fileData;
+            fileData.numSegments = fileSegments[requestedFile].size();
+            strcpy(fileData.fileName, requestedFile.c_str());
+            for (int i = 0; i < fileData.numSegments; ++i) {
+                fileData.Segments[i] = fileSegments[requestedFile][i];
+            }
+            MPI_Send(&fileData, sizeof(FileData), MPI_BYTE, status.MPI_SOURCE, TRACKER_FILE_SEGMENTS, MPI_COMM_WORLD);
+        } else if (status.MPI_TAG == SEND_FILE_SWARM) {
+            std::string requestedFile((char *) recvData);
+            struct swarm_t swarm;
+            swarm.numClients = fileSwarm[requestedFile].size();
+            for (int i = 0; i < swarm.numClients; ++i) {
+                swarm.clients[i] = fileSwarm[requestedFile][i].rank;
+            }
+            MPI_Send(&swarm, sizeof(swarm_t), MPI_BYTE, status.MPI_SOURCE, SEND_FILE_SWARM, MPI_COMM_WORLD);
+        }
+    }
+}
+
+void peer(int numtasks, int rank) {
+    pthread_t download_thread;
+    pthread_t upload_thread;
+    void *status;
+    int r;
+
+    /* Initial step before uploading/downloading. */
+    struct sendAllFiles ownedFiles;
 
     /* Open the coresponding file. */
     std::ifstream fin(PATH + "in" + std::to_string(rank) + ".txt");
@@ -30,102 +238,39 @@ void *download_thread_func(void *arg)
             fin >> newSegment.hash;
             newSegment.filePos = s;
             ownedFiles.files[f].Segments[s] = newSegment;
+            myFiles[ownedFiles.files[f].fileName].push_back(newSegment);
         }
     }
 
-    /* Send the owned files to the tracker. */
-    MPI_Send(&ownedFiles, sizeof(sendAllFiles), MPI_BYTE, TRACKER_RANK, 0, MPI_COMM_WORLD);
-
-    /* Wait until we can request files from tracker. */
-    MPI_Status status;
-    MPI_Recv(&recv, sizeof(packet), MPI_BYTE, TRACKER_RANK, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
-
-    if (recv.type == ACK) {
-        std::cout << "Received ACK from tracker.\n";
-    }
-    
-    /* Read the requested files. */
-    fin >> requestedFiles;
-    while (requestedFiles--) {
-
+    int requestedFilesNumber;
+    fin >> requestedFilesNumber;
+    for (int i = 0; i < requestedFilesNumber; ++i) {
+        std::string requestedFile;
+        fin >> requestedFile;
+        requestedFiles.push_back(requestedFile);
     }
 
     /* Close the file. */
     fin.close();
+    
+    /* Send the owned files to the tracker. */
+    MPI_Send(&ownedFiles, sizeof(sendAllFiles), MPI_BYTE, TRACKER_RANK, TRACKER_BARRIER, MPI_COMM_WORLD);
 
-    return NULL;
-}
+    /* Wait until we can request files from tracker. */
+    MPI_Status statusMPI;
+    struct packet recv;
+    do {
+      MPI_Recv(&recv, sizeof(packet), MPI_BYTE, TRACKER_RANK, MPI_ANY_TAG, MPI_COMM_WORLD, &statusMPI);
+    } while (recv.type != ACK);
 
-void *upload_thread_func(void *arg)
-{
-    int rank = *(int*) arg;
-
-    return NULL;
-}
-
-void tracker(int numtasks, int rank) {
-    /* <File, <Segments>> */
-    std::unordered_map<std::string, std::vector<struct Segment>> fileSegments;
-
-    /* <Segment, <Clients>> */
-    std::map<struct Segment, std::unordered_set<int>> segmentSwarm;
-
-    MPI_Status status;
-    int recvFromClients = 0;
-
-    while (true) {
-        /* Receive packets from clients. */
-        struct sendAllFiles recvOwnedFiles;
-        MPI_Recv(&recvOwnedFiles, sizeof(sendAllFiles), MPI_BYTE, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status);
-        recvFromClients++;
-
-        /* Iterate over all files. */
-        for (int f = 0; f < recvOwnedFiles.numFiles; ++f) {
-            std::string fileName(recvOwnedFiles.files[f].fileName);
-
-            /* Check if we have the segment data already for this file. */
-            if (fileSegments[fileName].size() == 0) {
-                for (int s = 0; s < recvOwnedFiles.files[f].numSegments; ++s) {
-                    struct Segment segment = recvOwnedFiles.files[f].Segments[s];
-                    fileSegments[fileName].push_back(segment);
-                }
-            }
-
-            /* Add the owner of the segment to the swarm. */
-            for (int s = 0; s < recvOwnedFiles.files[f].numSegments; ++s) {
-                struct Segment segment = recvOwnedFiles.files[f].Segments[s];
-                segmentSwarm[segment].insert(status.MPI_SOURCE);
-            }
-        }
-
-        if (recvFromClients == numtasks - 1) {
-            break;
-        }
-    }
-
-    /* Send ACK to all ranks. */
-    struct packet ack = {ACK, NULL};
-    for (int i = 1; i <= numtasks - 1; ++i) {
-        MPI_Send(&ack, sizeof(packet), MPI_BYTE, i, 0, MPI_COMM_WORLD);
-    }
-
-    // while (true) {
-    //     /* Primeste pachete si trimite inapoi swarmuri. */
-    // }
-}
-
-void peer(int numtasks, int rank) {
-    pthread_t download_thread;
-    pthread_t upload_thread;
-    void *status;
-    int r;
-
+    /* Start download thread. */
     r = pthread_create(&download_thread, NULL, download_thread_func, (void *) &rank);
     if (r) {
         printf("Eroare la crearea thread-ului de download\n");
         exit(-1);
     }
 
+    /* Start upload thread. */
     r = pthread_create(&upload_thread, NULL, upload_thread_func, (void *) &rank);
     if (r) {
         printf("Eroare la crearea thread-ului de upload\n");

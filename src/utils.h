@@ -9,6 +9,20 @@
 #define HASH_SIZE 32
 #define MAX_CHUNKS 100
 
+#define MAX_SEG_RUN 10                   // Maximum segments before updating swarm
+
+/* MPI CUSTOM TAGS FOR COMMUNICATION. */
+#define SEND_FILE_SWARM 10
+#define TRACKER_FILE_SEGMENTS 11
+#define CLIENT_ASK_SEGMENT 12
+#define CLIENT_DOWNLOAD_SEGMENT 13
+#define TRACKER_BARRIER 14
+#define PEER_TO_PEER_REQUEST 15
+#define PEER_TO_PEER_RESPONSE 16
+
+#define MAX_PACKET_SIZE 1024
+#define MAX_USERS 100
+
 struct Segment {
     int filePos;
     char hash[HASH_SIZE + 1];             // NULL terminator
@@ -16,6 +30,21 @@ struct Segment {
     bool operator<(const Segment &other) const {
         return strcmp(hash, other.hash) < 0;
     }
+
+    bool operator==(const Segment &other) const {
+        return strcmp(hash, other.hash) == 0 && filePos == other.filePos;
+    }
+};
+
+enum operation {
+    DOWNLOAD,
+    ASK
+};
+
+struct askSegment {
+    char fileName[MAX_FILENAME + 1];
+    Segment segment;
+    operation op;
 };
 
 struct FileData {
@@ -30,9 +59,30 @@ struct sendAllFiles {
 };
 
 enum packetType {
-    REQUEST_FILE,
     SEND_OWNED_FILES,
-    ACK
+    REQUEST_FILE_DATA,
+    ACK,
+    NACK
+};
+
+enum clientType {
+    SEED,
+    PEER,
+    LEECHER
+};
+
+struct client_t {
+    int rank;
+    clientType type;
+
+    bool operator<(const client_t &other) const {
+        return rank < other.rank;
+    }
+};
+
+struct swarm_t {
+    int numClients;
+    int clients[MAX_USERS];
 };
 
 struct packet {
