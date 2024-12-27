@@ -5,44 +5,45 @@
 #include <bits/stdc++.h>
 #include "utils.h"
 
-#define TRACKER_RANK 0
-#define MAX_FILES 10
-#define MAX_FILENAME 15
-#define HASH_SIZE 32
-#define MAX_CHUNKS 100
+/* For testing. */
+const std::string PATH = "../checker/tests/test1/";
 
 void *download_thread_func(void *arg)
 {
     int rank = *(int*) arg;
-    int numberOwnedFiles;
     int requestedFiles;
+    struct sendAllFiles ownedFiles;
+    struct packet send, recv;
 
     /* Open the coresponding file. */
-    std::ifstream fin("in" + std::to_string(rank) + ".txt");
+    std::ifstream fin(PATH + "in" + std::to_string(rank) + ".txt");
     DIE(!fin.is_open(), "Error opening the file.");
 
     /* Read content of ownedFiles. */
-    fin >> numberOwnedFiles;
+    fin >> ownedFiles.numFiles;
+    for (int f = 0; f < ownedFiles.numFiles; ++f) {
+        fin >> ownedFiles.files[f].fileName;
+        fin >> ownedFiles.files[f].numSegments;
 
-    std::vector<struct sendFileData> ownedFiles(numberOwnedFiles);
-    for (auto &file : ownedFiles) {
-        int numberSegments;
-
-        fin >> file.fileName;
-        fin >> numberSegments;
-
-        for (int i = 0; i < numberSegments; ++i) {
+        for (int s = 0; s < ownedFiles.files[f].numSegments; ++s) {
             struct Segment newSegment;
             fin >> newSegment.hash;
-            newSegment.filePos = i;
-            file.Segments.push_back(newSegment);
+            newSegment.filePos = s;
+            ownedFiles.files[f].Segments[s] = newSegment;
         }
     }
 
-    /* TODO: send the owned files to the tracker. */
+    /* Send the owned files to the tracker. */
+    MPI_Send(&ownedFiles, sizeof(sendAllFiles), MPI_BYTE, TRACKER_RANK, 0, MPI_COMM_WORLD);
 
-    /* TODO: Wait until we can request files from tracker. */
+    /* Wait until we can request files from tracker. */
+    MPI_Status status;
+    MPI_Recv(&recv, sizeof(packet), MPI_BYTE, TRACKER_RANK, MPI_ANY_TAG, MPI_COMM_WORLD, &status);
 
+    if (recv.type == ACK) {
+        std::cout << "Received ACK from tracker.\n";
+    }
+    
     /* Read the requested files. */
     fin >> requestedFiles;
     while (requestedFiles--) {
@@ -67,26 +68,50 @@ void tracker(int numtasks, int rank) {
     std::unordered_map<std::string, std::vector<struct Segment>> fileSegments;
 
     /* <Segment, <Clients>> */
-    std::map<struct Segment, std::vector<int>> segmentSwarm;
+    std::map<struct Segment, std::unordered_set<int>> segmentSwarm;
 
+    MPI_Status status;
     int recvFromClients = 0;
+
     while (true) {
-        /* TODO: Primeste pachete. */
+        /* Receive packets from clients. */
+        struct sendAllFiles recvOwnedFiles;
+        MPI_Recv(&recvOwnedFiles, sizeof(sendAllFiles), MPI_BYTE, MPI_ANY_SOURCE, 0, MPI_COMM_WORLD, &status);
         recvFromClients++;
+
+        /* Iterate over all files. */
+        for (int f = 0; f < recvOwnedFiles.numFiles; ++f) {
+            std::string fileName(recvOwnedFiles.files[f].fileName);
+
+            /* Check if we have the segment data already for this file. */
+            if (fileSegments[fileName].size() == 0) {
+                for (int s = 0; s < recvOwnedFiles.files[f].numSegments; ++s) {
+                    struct Segment segment = recvOwnedFiles.files[f].Segments[s];
+                    fileSegments[fileName].push_back(segment);
+                }
+            }
+
+            /* Add the owner of the segment to the swarm. */
+            for (int s = 0; s < recvOwnedFiles.files[f].numSegments; ++s) {
+                struct Segment segment = recvOwnedFiles.files[f].Segments[s];
+                segmentSwarm[segment].insert(status.MPI_SOURCE);
+            }
+        }
 
         if (recvFromClients == numtasks - 1) {
             break;
         }
     }
 
-    /* TODO: Send ACK to all ranks. */
-    for (int i = 1; i <= numtasks; ++i) {
-
+    /* Send ACK to all ranks. */
+    struct packet ack = {ACK, NULL};
+    for (int i = 1; i <= numtasks - 1; ++i) {
+        MPI_Send(&ack, sizeof(packet), MPI_BYTE, i, 0, MPI_COMM_WORLD);
     }
 
-    while (true) {
-        /* Primeste pachete si trimite inapoi swarmuri. */
-    }
+    // while (true) {
+    //     /* Primeste pachete si trimite inapoi swarmuri. */
+    // }
 }
 
 void peer(int numtasks, int rank) {
