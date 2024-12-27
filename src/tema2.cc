@@ -41,14 +41,12 @@ void *download_thread_func(void *arg)
         int recvSegments = 0;
         while (true) {
             if (recvSegments % MAX_SEG_RUN == 0) {
-                std::cout << "INTRA AICI" << std::endl;
                 /* Request the swarm list update. */
                 MPI_Send(requestedFile, MAX_FILENAME + 1, MPI_BYTE, TRACKER_RANK, SEND_FILE_SWARM, MPI_COMM_WORLD);
                 MPI_Recv(&swarm, sizeof(swarm_t), MPI_BYTE, TRACKER_RANK, SEND_FILE_SWARM, MPI_COMM_WORLD, &status);
                 numClients = swarm.numClients;
                 clients = swarm.clients;
             }
-            std::cout << "IESE AICI" << std::endl;
 
             /* Check every client and fine the one with loawest number of uploads. */
             int bestClient = -1;
@@ -70,9 +68,8 @@ void *download_thread_func(void *arg)
 
             toAsk.op = DOWNLOAD;
 
-            std::cout << "Acum aici !!\n";
-            if (bestClient != -1) {
-                std::cout << "ERROR: No client has the segment. RETRY...\n";
+            if (bestClient == -1) {
+                std::cout << "ERROR: No client has the segment. RETRY1...\n";
                 continue;
             } else {
                 MPI_Send(&toAsk, sizeof(askSegment), MPI_BYTE, bestClient, PEER_TO_PEER_REQUEST, MPI_COMM_WORLD);
@@ -86,19 +83,27 @@ void *download_thread_func(void *arg)
                         /* TODO: Say to tracker that I am now peer. */
                     }
                 } else {
-                    std::cout << "ERROR: Client didn't send the segment. RETRY...\n";
+                    std::cout << "ERROR: Client didn't send the segment. RETRY2...\n";
                     continue;
                 }
             }
 
             if (recvSegments == numSegments) {
                 /* TODO: send to tracker that I finished download + make me seed. */
+
+                /* Create the file with the rank and file name with segments. */
+                std::ofstream fout("client" + std::to_string(rank) + "_" + requestedFile);
+                DIE(!fout.is_open(), "Error opening the file.");
+
+                for (auto segment : myFiles[requestedFile]) {
+                    fout << segment.hash << '\n';
+                }
+
+                fout.close();
                 break;
             }
         }
     }
-
-
 
     /* TODO: send to tracker the message that all files are installed. */
 

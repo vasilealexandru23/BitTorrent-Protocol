@@ -5,4 +5,4 @@ clean:
 	rm -rf tema3
 
 run:
-	mpirun --oversubscribe -np 3 ./tema2
+	mpirun --oversubscribe -np 4 ./tema2
