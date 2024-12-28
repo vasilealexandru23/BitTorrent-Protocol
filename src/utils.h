@@ -21,7 +21,7 @@
 #define RESPONSE 16
 #define I_AM_PEER 17
 #define I_AM_SEED 18
-#define DONE_MY_WORK 19
+#define DONE_MY_DOWNLOAD 19
 #define STOP 20
 
 #define MAX_PACKET_SIZE 1024
