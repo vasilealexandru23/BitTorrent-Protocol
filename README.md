@@ -16,6 +16,6 @@ the computer has that segment it will respond with it's number of uploads done,
 otherwise will respond with -1. The requester will go over all owners of the file
 and will choose for transfer, the one with the lowest number of uploads done.
 
-### Note: Read more about the model in this [here](https://en.wikipedia.org/wiki/BitTorrent).
+### Note: Read more about the protocol [here](https://en.wikipedia.org/wiki/BitTorrent).
 
 ### Copyright 2024 Vasile Alexandru-Gabriel (vasilealexandru37@gmail.com)
