@@ -4,7 +4,7 @@
 
 ## `Structure of the directory:`
   * `checker/` -> Directory containing the testing files to check correctness.
-  * `src/` -> Directory with implementation of the protocol.
+  * `src/` -> Directory with implementation of the protocol and simulation.
   * `docker*` -> Files for testing the program with docker.
     
 ## Implementation:
