@@ -48,6 +48,12 @@ to make a client peer or seed for a file, or a signal that a client finished to 
 it's requested files. After all clients have finished, it sends a signal to them to stop
 the UPLOAD thread and it stops.
 
+After testing many times, I found that I had a race condition on the variable that stores
+the segments owned by a client (one thread can access that variable and another thread might
+right in it (it is a map) and because of some reallocation and delay of the threads update
+there might be some invalid accesses.) The solution is to make it an "atomic map", by using
+a mutex on it and locking/unlocking it every time there is a write or a read.
+
 ### Note: Read more about the protocol [here](https://en.wikipedia.org/wiki/BitTorrent).
 
 ### Copyright 2024 Vasile Alexandru-Gabriel (vasilealexandru37@gmail.com)

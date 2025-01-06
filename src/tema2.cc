@@ -6,6 +6,7 @@
 #include "utils.h"
 
 /* Keep local files for interogation. */
+pthread_mutex_t mutexMyFiles;
 std::unordered_map<std::string, std::vector<struct Segment>> myFiles;
 
 /* Requested file names. */
@@ -37,10 +38,12 @@ void *download_thread_func(void *arg)
         int recvSegments = 0;
         while (true) {
             /* Check if the client has the segment. */
+            pthread_mutex_lock(&mutexMyFiles);
             if (find(myFiles[requestedFile].begin(), myFiles[requestedFile].end(), file_segments[recvSegments]) != myFiles[requestedFile].end()) {
                 recvSegments++;
                 continue;
             }
+            pthread_mutex_unlock(&mutexMyFiles);
 
             if (recvSegments % MAX_SEG_RUN == 0) {
                 /* Request the swarm list update. */
@@ -79,7 +82,9 @@ void *download_thread_func(void *arg)
                 MPI_Recv(&response, sizeof(packet), MPI_BYTE, bestClient, RESPONSE, MPI_COMM_WORLD, &status);
                 if (response.type == ACK) {
                     /* Mark segment as downloaded and increment the index of the current segment.*/
+                    pthread_mutex_lock(&mutexMyFiles);
                     myFiles[requestedFile].push_back(file_segments[recvSegments++]);
+                    pthread_mutex_unlock(&mutexMyFiles);
                     if (recvSegments == 1) {
                         /* Say to tracker that I am now peer. */
                         MPI_Send(requestedFile, MAX_FILENAME + 1, MPI_BYTE, TRACKER_RANK, I_AM_PEER, MPI_COMM_WORLD);
@@ -128,6 +133,7 @@ void *upload_thread_func(void *arg)
             break;
         } else {
             struct askSegment askSegment = *(struct askSegment *) recvData;
+            pthread_mutex_lock(&mutexMyFiles);
             switch(askSegment.op) {
                 case ASK:
                     if (find(myFiles[askSegment.fileName].begin(), myFiles[askSegment.fileName].end(), askSegment.segment) != myFiles[askSegment.fileName].end()) {
@@ -150,6 +156,7 @@ void *upload_thread_func(void *arg)
                     }
                     break;
             }
+            pthread_mutex_unlock(&mutexMyFiles);
         }
     }
 
@@ -297,6 +304,9 @@ void peer(int numtasks, int rank) {
       MPI_Recv(&recv, sizeof(packet), MPI_BYTE, TRACKER_RANK, MPI_ANY_TAG, MPI_COMM_WORLD, &statusMPI);
     } while (recv.type != ACK);
 
+    /* Init the mutex. */
+    pthread_mutex_init(&mutexMyFiles, NULL);
+
     /* Start download thread. */
     r = pthread_create(&download_thread, NULL, download_thread_func, (void *) &rank);
     if (r) {
@@ -322,6 +332,8 @@ void peer(int numtasks, int rank) {
         printf("Eroare la asteptarea thread-ului de upload\n");
         exit(-1);
     }
+
+    pthread_mutex_destroy(&mutexMyFiles);
 }
  
 int main (int argc, char *argv[]) {
